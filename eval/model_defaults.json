@@ -1,0 +1,24 @@
+{
+  "MODEL_DEFAULT": "qwen2.5:3b",
+  "MODEL_CONVERSATIONAL": "qwen2.5:7b",
+  "MODEL_EMBED": "nomic-embed-text",
+  "MODEL_REASONING": "deepseek-r1:7b",
+  "notes": {
+    "qwen2.5:3b": {
+      "tok_per_s": 0.0,
+      "vram_mb": 2143
+    },
+    "qwen2.5:7b": {
+      "tok_per_s": 0.0,
+      "vram_mb": 0
+    },
+    "llama3.2:3b": {
+      "tok_per_s": 0.0,
+      "vram_mb": 2309
+    },
+    "nomic-embed-text": {
+      "tok_per_s": 0.0,
+      "vram_mb": 393
+    }
+  }
+}
