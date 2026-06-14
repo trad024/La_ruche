@@ -1,0 +1,100 @@
+[
+  {
+    "id": "fin-001",
+    "agent": "financial",
+    "question": "What is the total AUM of the portfolio?",
+    "expected_keywords": ["20", "million", "AUM"],
+    "expected_contains": "20"
+  },
+  {
+    "id": "fin-002",
+    "agent": "financial",
+    "question": "What is the portfolio TWR?",
+    "expected_keywords": ["178", "TWR", "percent"],
+    "expected_contains": "178"
+  },
+  {
+    "id": "fin-003",
+    "agent": "financial",
+    "question": "What is the annualized return?",
+    "expected_keywords": ["7", "annualized", "return"],
+    "expected_contains": "7"
+  },
+  {
+    "id": "fin-004",
+    "agent": "financial",
+    "question": "Show me the geographic breakdown of the portfolio",
+    "expected_keywords": ["Asia", "North America", "geography"],
+    "expected_contains": "Asia"
+  },
+  {
+    "id": "fin-005",
+    "agent": "financial",
+    "question": "What are the top performing deals?",
+    "expected_keywords": ["deal", "top", "performance"],
+    "expected_contains": "deal"
+  },
+  {
+    "id": "fin-006",
+    "agent": "financial",
+    "question": "What is the Sharpe ratio?",
+    "expected_keywords": ["Sharpe", "ratio", "0.58"],
+    "expected_contains": "0.58"
+  },
+  {
+    "id": "fin-007",
+    "agent": "financial",
+    "question": "What is the portfolio IRR?",
+    "expected_keywords": ["IRR", "8", "percent"],
+    "expected_contains": "8"
+  },
+  {
+    "id": "fin-008",
+    "agent": "financial",
+    "question": "What is the sector breakdown?",
+    "expected_keywords": ["Real Estate", "Private Equity", "sector"],
+    "expected_contains": "Real Estate"
+  },
+  {
+    "id": "mkt-001",
+    "agent": "market",
+    "question": "What is the current S&P 500 level?",
+    "expected_keywords": ["S&P", "5247", "500"],
+    "expected_contains": "5247"
+  },
+  {
+    "id": "mkt-002",
+    "agent": "market",
+    "question": "What is the current gold price?",
+    "expected_keywords": ["gold", "2328", "price"],
+    "expected_contains": "2328"
+  },
+  {
+    "id": "mkt-003",
+    "agent": "market",
+    "question": "Give me a market overview",
+    "expected_keywords": ["S&P", "Fed", "market"],
+    "expected_contains": "S&P"
+  },
+  {
+    "id": "doc-001",
+    "agent": "docs",
+    "question": "What is the Wella factsheet about?",
+    "expected_keywords": ["Wella", "beauty", "investment"],
+    "expected_contains": "Wella"
+  },
+  {
+    "id": "doc-002",
+    "agent": "docs",
+    "question": "Search for portfolio overview document",
+    "expected_keywords": ["portfolio", "overview", "AUM"],
+    "expected_contains": "portfolio"
+  },
+  {
+    "id": "act-001",
+    "agent": "action",
+    "question": "Build a portfolio report",
+    "expected_keywords": ["report", "AUM", "performance"],
+    "expected_contains": "AUM"
+  }
+]

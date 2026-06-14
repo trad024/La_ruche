@@ -1,5 +1,5 @@
-"""Tracing stubs — replaced by Langfuse in Phase 12."""
+"""Tracing — Langfuse when configured, noop fallback."""
 
-from agentkit.tracing.noop import trace_span
+from agentkit.tracing.langfuse import trace_span
 
 __all__ = ["trace_span"]

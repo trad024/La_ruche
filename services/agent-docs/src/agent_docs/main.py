@@ -15,7 +15,7 @@ from agentkit.a2a.router import a2a_router
 from agentkit.llm.client import LLMClient, ModelRole
 from agentkit.mcp.registry import MCPRegistry
 from agentkit.mcp.tool import MCPTool, ToolResult
-from agentkit.tracing.noop import trace_span
+from agentkit.tracing import trace_span
 from fastapi import FastAPI
 
 _QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")

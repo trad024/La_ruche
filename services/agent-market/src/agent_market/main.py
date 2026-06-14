@@ -5,7 +5,7 @@ from typing import Any
 from agentkit.a2a.models import A2ATask, AgentCard, AgentSkill
 from agentkit.a2a.router import a2a_router
 from agentkit.mcp.registry import MCPRegistry
-from agentkit.tracing.noop import trace_span
+from agentkit.tracing import trace_span
 from fastapi import FastAPI
 
 from agent_market.tools import EconIndicatorTool, MarketOverviewTool, MarketQuoteTool

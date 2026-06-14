@@ -12,7 +12,7 @@ from typing import Any
 from agentkit.a2a.models import A2ATask
 from agentkit.llm.client import LLMClient, ModelRole
 from agentkit.mcp.registry import MCPRegistry
-from agentkit.tracing.noop import trace_span
+from agentkit.tracing import trace_span
 
 from agent_financial.tools import (
     GeographyBreakdownTool,
