@@ -11,7 +11,7 @@ from pydantic import BaseModel
 class ToolResult(BaseModel):
     """Structured result returned by any MCPTool."""
 
-    content: Any
+    content: Any = None
     error: str | None = None
     metadata: dict[str, Any] = {}
 
