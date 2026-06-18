@@ -21,6 +21,7 @@ import {
   type VoiceStatus,
 } from '../api/client'
 import { useAuth } from '../auth/useAuth'
+import { speakLocalized } from '../utils/speech'
 
 type Mode = 'conversation' | 'transcribe' | 'synthesize'
 type BrowserRecognition = {
@@ -183,11 +184,7 @@ export default function Voice() {
   }
 
   function speakInBrowser(text: string) {
-    window.speechSynthesis.cancel()
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.rate = 0.96
-    utterance.pitch = 0.92
-    window.speechSynthesis.speak(utterance)
+    void speakLocalized(text, { rate: 0.96, pitch: 0.92 })
   }
 
   async function synthesize() {
@@ -266,7 +263,7 @@ export default function Voice() {
               <textarea
                 value={ttsText}
                 onChange={event => setTtsText(event.target.value)}
-                placeholder="Write the text you want WealthMesh to speak..."
+                placeholder="Write the text you want LaRuche to speak..."
               />
               <div className="composer-footer">
                 <span>{ttsText.length} characters</span>
@@ -330,7 +327,7 @@ export default function Voice() {
             </div>
             <ResultBlock label="You said" value={transcript || 'Your transcript will appear here.'} />
             {mode === 'conversation' && (
-              <ResultBlock label="WealthMesh replied" value={answer || 'The spoken response will appear here.'} accent />
+              <ResultBlock label="LaRuche replied" value={answer || 'The spoken response will appear here.'} accent />
             )}
           </section>
         </aside>

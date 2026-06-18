@@ -84,13 +84,36 @@ _TOOL_MAP: list[tuple[list[str], str, dict[str, Any]]] = [
 
 def _pick_tools(message: str) -> list[tuple[str, dict[str, Any]]]:
     lower = message.lower()
+    intent_text = lower.split("attached file context:", 1)[0]
+    intent_text = intent_text.split("response format:", 1)[0]
+    if "portiflio" in intent_text:
+        intent_text = intent_text.replace("portiflio", "portfolio")
+
+    if "portfolio" in intent_text and not any(
+        keyword in intent_text
+        for keyword in (
+            "volatility",
+            "risk",
+            "sharpe",
+            "irr",
+            "twr",
+            "annualized",
+            "aum",
+            "allocation",
+            "sector",
+            "geography",
+            "deal",
+        )
+    ):
+        return [("portfolio.summary", {})]
+
     picked: list[tuple[str, dict[str, Any]]] = []
     seen: set[str] = set()
     for keywords, tool_name, kwargs in _TOOL_MAP:
         # Dedup by tool *and* args so multiple metrics.compute calls (aum, twr,
         # irr, …) are all kept for a multi-metric question.
         sig = f"{tool_name}:{sorted(kwargs.items())}"
-        if any(kw in lower for kw in keywords) and sig not in seen:
+        if any(kw in intent_text for kw in keywords) and sig not in seen:
             picked.append((tool_name, kwargs))
             seen.add(sig)
     return picked or [("portfolio.summary", {})]
@@ -104,7 +127,9 @@ _SYSTEM_PROMPT = """You are a wealth-management financial assistant.
 You have access to real portfolio data from the tools below.
 Answer the client's question using ONLY the data provided by the tools.
 Be precise with numbers. Do not hallucinate figures.
-Format monetary values with $ and M/K suffixes where appropriate."""
+Format monetary values with $ and M/K suffixes where appropriate.
+Never sign the answer, never include "Best regards", and never use placeholders such as [Your Name].
+Use "inception-to-date TWR" when explaining ITD TWR."""
 
 
 async def handle_task(task: A2ATask) -> A2ATask:

@@ -1,4 +1,4 @@
-import { ShieldCheck, Sparkles } from 'lucide-react'
+import { ShieldCheck } from 'lucide-react'
 import { useAuth } from '../auth/useAuth'
 
 export default function Login() {
@@ -20,12 +20,9 @@ export default function Login() {
 
       <section className="login-form-wrap">
         <div className="glass-panel login-card">
-          <div className="brand-block">
-            <div className="brand-mark"><Sparkles className="h-4 w-4" /></div>
-            <div>
-              <h1 className="brand-name">WealthMesh</h1>
-              <p className="brand-caption">Private intelligence</p>
-            </div>
+          <div className="login-brand-lockup">
+            <img src="/brand/laruche-animated.gif" alt="LaRuche" />
+            <p>Private intelligence</p>
           </div>
           <h2>Welcome back</h2>
           <p>Sign in to enter your secure advisory workspace.</p>

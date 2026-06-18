@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Test Scenarios ({{ cases|length }})</h1>
+<table>
+  <thead><tr><th>ID</th><th>Intent</th><th>Type</th><th>Input</th><th>Channels</th></tr></thead>
+  <tbody>
+  {% for c in cases %}
+  <tr>
+    <td><code>{{ c.id }}</code></td>
+    <td>{{ c.intent }}</td>
+    <td><span class="badge" style="background:var(--border)">{{ c.type }}</span></td>
+    <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.input }}</td>
+    <td>{{ c.channels | join(', ') }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

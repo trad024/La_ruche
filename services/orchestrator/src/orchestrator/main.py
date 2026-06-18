@@ -1,23 +1,31 @@
 from __future__ import annotations
 
+import base64
 import json
+import os
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 
+import httpx
 from agentkit.auth import UserContext, get_current_user
 from agentkit.guardrails import GuardrailViolation, check_message
 from agentkit.market import get_market
 from agentkit.portfolio import DEALS, GEO, SECTOR, TOP_DEALS, get_metrics
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from orchestrator.graph import run_turn
+from orchestrator.graph import run_deep_turn_payloads, run_turn
 
 app = FastAPI(title="Orchestrator", version="0.1.0")
+
+_OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+_OCR_MODEL = os.getenv("MODEL_OCR", "llava:7b")
+_VOICE_URL = os.getenv("VOICE_URL", "http://localhost:8006").rstrip("/")
+_MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
 app.add_middleware(
     CORSMiddleware,
@@ -108,7 +116,9 @@ async def market(  # noqa: B008
 
 class ChatRequest(BaseModel):
     message: str
+    display_message: str = ""
     conversation_id: str = ""
+    mode: str = "instant"
 
 
 @app.post("/api/chat")
@@ -125,12 +135,153 @@ async def chat(  # noqa: B008
     conv_id = body.conversation_id or str(uuid.uuid4())
 
     async def _sse() -> AsyncIterator[str]:
-        async for token in run_turn(safe_message, conv_id, user.user_id):
-            payload = json.dumps({"token": token, "conversation_id": conv_id})
-            yield f"data: {payload}\n\n"
+        if body.mode == "deep":
+            display_message = check_message(body.display_message or body.message)
+            async for payload in run_deep_turn_payloads(
+                display_message, conv_id, user.user_id, execution_message=safe_message
+            ):
+                event_type = "reasoning" if payload["type"] == "reasoning" else "token"
+                data = json.dumps(
+                    {
+                        event_type: payload["content"],
+                        "conversation_id": conv_id,
+                    }
+                )
+                yield f"data: {data}\n\n"
+        else:
+            display_message = check_message(body.display_message or body.message)
+            async for token in run_turn(
+                display_message, conv_id, user.user_id, execution_message=safe_message
+            ):
+                payload = json.dumps({"token": token, "conversation_id": conv_id})
+                yield f"data: {payload}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(_sse(), media_type="text/event-stream")
+
+
+async def _extract_text_file(file: UploadFile, data: bytes) -> str:
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("latin-1", errors="replace")
+
+
+async def _extract_audio(file: UploadFile, data: bytes) -> str:
+    try:
+        async with httpx.AsyncClient(timeout=45) as client:
+            files = {
+                "audio": (file.filename or "audio.webm", data, file.content_type or "audio/webm")
+            }
+            resp = await client.post(f"{_VOICE_URL}/voice/transcribe", files=files)
+            resp.raise_for_status()
+            return str(resp.json().get("transcript", "")).strip()
+    except Exception as exc:
+        return f"[Audio transcription unavailable: {exc}]"
+
+
+async def _extract_image(file: UploadFile, data: bytes) -> str:
+    try:
+        prompt = (
+            "Extract all readable text from this image. If it is a financial document or screenshot, "
+            "preserve numbers, headings, dates, currencies, and table-like structure. Return only the extracted text."
+        )
+        payload = {
+            "model": _OCR_MODEL,
+            "prompt": prompt,
+            "images": [base64.b64encode(data).decode()],
+            "stream": False,
+        }
+        async with httpx.AsyncClient(timeout=90) as client:
+            resp = await client.post(f"{_OLLAMA_URL}/api/generate", json=payload)
+            resp.raise_for_status()
+            return str(resp.json().get("response", "")).strip()
+    except Exception as exc:
+        return f"[OCR unavailable for {file.filename}: {exc}]"
+
+
+@app.get("/api/attachments/status")
+async def attachment_status(  # noqa: B008
+    user: UserContext = Depends(get_current_user),  # noqa: B008
+) -> dict[str, Any]:
+    installed = False
+    ollama_online = False
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{_OLLAMA_URL}/api/tags")
+            resp.raise_for_status()
+            ollama_online = True
+            models = resp.json().get("models", [])
+            installed = any(
+                model.get("name") == _OCR_MODEL or model.get("model") == _OCR_MODEL
+                for model in models
+            )
+    except Exception:
+        pass
+
+    return {
+        "ocr": {
+            "engine": "ollama",
+            "model": _OCR_MODEL,
+            "installed": installed,
+            "ready": ollama_online and installed,
+        },
+        "ollama_url": _OLLAMA_URL,
+        "voice_url": _VOICE_URL,
+        "limits": {"max_files": 12, "max_file_mb": _MAX_ATTACHMENT_BYTES // (1024 * 1024)},
+    }
+
+
+@app.post("/api/attachments/extract")
+async def extract_attachments(  # noqa: B008
+    files: Annotated[list[UploadFile], File(...)],
+    user: UserContext = Depends(get_current_user),  # noqa: B008
+) -> dict[str, Any]:
+    """Extract text context from text, image, and audio attachments."""
+    extracted: list[dict[str, str]] = []
+    for file in files[:12]:
+        data = await file.read()
+        name = file.filename or "attachment"
+        content_type = file.content_type or ""
+        if len(data) > _MAX_ATTACHMENT_BYTES:
+            extracted.append(
+                {
+                    "name": name,
+                    "kind": "unsupported",
+                    "content": "",
+                    "error": "File is larger than the 8 MB demo limit.",
+                }
+            )
+            continue
+
+        if content_type.startswith("text/") or name.lower().endswith(
+            (".txt", ".md", ".csv", ".json")
+        ):
+            content = await _extract_text_file(file, data)
+            kind = "text"
+        elif content_type.startswith("image/") or name.lower().endswith(
+            (".png", ".jpg", ".jpeg", ".webp")
+        ):
+            content = await _extract_image(file, data)
+            kind = "image"
+        elif content_type.startswith("audio/") or name.lower().endswith(
+            (".wav", ".mp3", ".m4a", ".webm", ".ogg")
+        ):
+            content = await _extract_audio(file, data)
+            kind = "audio"
+        else:
+            content = ""
+            kind = "unsupported"
+
+        extracted.append(
+            {
+                "name": name,
+                "kind": kind,
+                "content": content[:20_000],
+                **({"error": "Unsupported file type."} if kind == "unsupported" else {}),
+            }
+        )
+    return {"attachments": extracted}
 
 
 # ── GDPR ───────────────────────────────────────────────────────────────────────

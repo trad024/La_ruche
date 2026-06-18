@@ -43,6 +43,15 @@ _DOC_STORE: dict[str, str] = {
     ),
 }
 _vector_store = QdrantDocumentStore()
+_ATTACHMENT_CONTEXT_MARKER = "attached file context:"
+
+
+def _extract_attachment_context(message: str) -> str:
+    lower = message.lower()
+    index = lower.find(_ATTACHMENT_CONTEXT_MARKER)
+    if index == -1:
+        return ""
+    return message[index + len(_ATTACHMENT_CONTEXT_MARKER) :].strip()
 
 
 def _simple_search(query: str, top_k: int = 3) -> list[dict[str, Any]]:
@@ -150,6 +159,33 @@ _llm = LLMClient(role=ModelRole.DEFAULT)
 async def handle_task(task: A2ATask) -> A2ATask:
     msg = task.messages[-1].content if task.messages else ""
     with trace_span("docs_agent", task_id=task.task_id):
+        attachment_context = _extract_attachment_context(msg)
+        if attachment_context:
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a document analyst. Answer using only the attached file context. "
+                        "Do not add facts from seeded demo documents or portfolio tools."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"User request and attached context:\n{msg}",
+                },
+            ]
+            try:
+                answer = await _llm.chat(messages)
+            except Exception:
+                answer = f"I found attached file context:\n\n{attachment_context[:3000]}"
+            return task.succeed(
+                answer,
+                {
+                    "source": "attachments",
+                    "backend": "request-context",
+                },
+            )
+
         result = await _registry.call("rag.search", query=msg, top_k=3)
         if result.ok and result.content and "No relevant" not in result.content:
             messages = [

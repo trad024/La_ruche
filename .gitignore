@@ -48,3 +48,6 @@ secrets/
 # Local tooling & runtime logs
 .claude/
 .runtime-logs/
+
+# Raw design exports kept locally; optimized web assets live in frontend/public/brand.
+Logo/animated_gif.gif

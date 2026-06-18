@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import {
   AudioLines,
   Bot,
+  Check,
   ChevronDown,
+  Mail,
+  MessageCircle,
   Mic,
   Paperclip,
   Plus,
@@ -11,18 +14,45 @@ import {
   User,
   X,
 } from 'lucide-react'
-import { runVoiceChat, streamChat, transcribeAudio, type ChatMessage } from '../api/client'
+import {
+  extractAttachments,
+  runVoiceChat,
+  streamChat,
+  transcribeAudio,
+  type ChatMessage,
+  type ExtractedAttachment,
+} from '../api/client'
 import { useAuth } from '../auth/useAuth'
+import { detectLanguage, isRtl, languageInstruction } from '../utils/language'
+import { speakLocalized } from '../utils/speech'
 
 type ListeningMode = 'dictation' | 'conversation' | null
 type VoicePhase = 'idle' | 'listening' | 'processing' | 'speaking'
 type ResponseMode = 'instant' | 'deep'
-type TextAttachment = { name: string; content: string }
+type ToolConfirmation = {
+  kind: 'email' | 'whatsapp'
+  target: string
+  label: string
+}
+type ToolStatus = 'pending' | 'running' | 'approved' | 'denied'
+type UiChatMessage = ChatMessage & {
+  responseMode?: ResponseMode
+  reasoning?: string
+  startedAt?: number
+  completedAt?: number
+  sourceRequest?: string
+  toolConfirmation?: ToolConfirmation
+  toolStatus?: ToolStatus
+}
+
+function nowMs() {
+  return Date.now()
+}
 
 export default function Chat() {
   const { token } = useAuth()
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'assistant', content: 'Hello! I\'m your WealthMesh advisor. How can I help you today?' },
+  const [messages, setMessages] = useState<UiChatMessage[]>([
+    { role: 'assistant', content: 'Hello! I\'m your LaRuche advisor. How can I help you today?' },
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -30,7 +60,7 @@ export default function Chat() {
   const [voicePhase, setVoicePhase] = useState<VoicePhase>('idle')
   const [voiceSessionActive, setVoiceSessionActive] = useState(false)
   const [responseMode, setResponseMode] = useState<ResponseMode>('instant')
-  const [attachment, setAttachment] = useState<TextAttachment | null>(null)
+  const [attachments, setAttachments] = useState<ExtractedAttachment[]>([])
   const [voiceNotice, setVoiceNotice] = useState('')
   const [convId] = useState(() => crypto.randomUUID())
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -55,49 +85,123 @@ export default function Chat() {
     window.speechSynthesis?.cancel()
   }, [])
 
-  async function send(message = input, speakReply = false) {
-    const cleanMessage = message.trim()
+  async function send(
+    message = input,
+    speakReply = false,
+    options: { displayMessage?: string; mode?: ResponseMode } = {},
+  ) {
+    const cleanMessage = message.trim() || (attachments.length ? 'Please analyze the attached files.' : '')
     if (!cleanMessage || loading) return
 
-    const attachmentLabel = attachment ? `\n\nAttached: ${attachment.name}` : ''
-    const context = attachment ? `\n\nAttached context (${attachment.name}):\n${attachment.content}` : ''
-    const depthInstruction = responseMode === 'deep'
-      ? '\n\nPlease provide a thorough analysis with the key assumptions and risks.'
+    const activeMode = options.mode ?? responseMode
+    const language = detectLanguage(cleanMessage)
+    const attachmentLabel = attachments.length
+      ? `\n\nAttached: ${attachments.map(file => file.name).join(', ')}`
       : ''
-    const requestMessage = `${cleanMessage}${context}${depthInstruction}`
+    const context = attachments.length
+      ? `\n\nAttached file context:\n${attachments.map(file => (
+          `[${file.kind}] ${file.name}\n${file.content || file.error || 'No readable content extracted.'}`
+        )).join('\n\n')}`
+      : ''
+    const modeInstruction = activeMode === 'deep'
+      ? '\n\nResponse format: include conclusion, evidence, assumptions, risks, and next actions when useful. Do not reveal hidden chain-of-thought.'
+      : '\n\nResponse format: answer directly and briefly. Do not repeat the user question.'
+    const actionContext = buildActionContext(cleanMessage, messages)
+    const personaInstruction = `\n\nAdvisor style: You are LaRuche, not WealthMesh. ${languageInstruction(language)} Do not sign as [Your Name], and do not add email-style signoffs.`
+    const requestMessage = `${cleanMessage}${context}${actionContext}${modeInstruction}${personaInstruction}`
+    const sourceRequest = `${cleanMessage}${actionContext}`
+    const visibleMessage = options.displayMessage ?? `${cleanMessage}${attachmentLabel}`
 
     setInput('')
-    setAttachment(null)
+    setAttachments([])
     setVoiceNotice('')
+    const assistantStartedAt = nowMs()
     setMessages(prev => [
       ...prev,
-      { role: 'user', content: `${cleanMessage}${attachmentLabel}` },
-      { role: 'assistant', content: '' },
+      { role: 'user', content: visibleMessage },
+      { role: 'assistant', content: '', responseMode: activeMode, startedAt: assistantStartedAt, sourceRequest },
     ])
     setLoading(true)
 
     let response = ''
     try {
-      for await (const tokenChunk of streamChat(requestMessage, convId, token)) {
-        response += tokenChunk
+      for await (const chunk of streamChat(requestMessage, convId, token, activeMode, visibleMessage)) {
+        if (chunk.type === 'reasoning') {
+          setMessages(prev => {
+            const updated = [...prev]
+            const last = updated[updated.length - 1]
+            updated[updated.length - 1] = {
+              ...last,
+              reasoning: [last.reasoning, chunk.content].filter(Boolean).join('\n\n'),
+            }
+            return updated
+          })
+          continue
+        }
+        response += chunk.content
         setMessages(prev => {
           const updated = [...prev]
-          updated[updated.length - 1] = { role: 'assistant', content: response }
+          updated[updated.length - 1] = { ...updated[updated.length - 1], role: 'assistant', content: response }
           return updated
         })
       }
-      if (speakReply && response.trim()) speak(response)
+      if (speakReply && response.trim()) void speak(response)
     } catch {
       const fallback = 'I could not reach the advisory mesh. Please try again.'
       setMessages(prev => {
         const updated = [...prev]
-        updated[updated.length - 1] = { role: 'assistant', content: fallback }
+        updated[updated.length - 1] = {
+          role: 'assistant',
+          content: fallback,
+          responseMode,
+          startedAt: assistantStartedAt,
+          completedAt: nowMs(),
+        }
         return updated
       })
-      if (speakReply) speak(fallback)
+      if (speakReply) void speak(fallback)
     } finally {
+      setMessages(prev => {
+        const updated = [...prev]
+        const last = updated[updated.length - 1]
+        const toolConfirmation = parseToolConfirmation(response)
+        if (last?.role === 'assistant' && last.responseMode === activeMode && !last.completedAt) {
+          updated[updated.length - 1] = {
+            ...last,
+            completedAt: nowMs(),
+            toolConfirmation: toolConfirmation ?? last.toolConfirmation,
+            toolStatus: toolConfirmation ? 'pending' : last.toolStatus,
+          }
+        }
+        return updated
+      })
       setLoading(false)
     }
+  }
+
+  async function handleToolDecision(index: number, action: ToolConfirmation, approved: boolean) {
+    const sourceRequest = messages[index]?.sourceRequest || messages[index - 1]?.content || ''
+
+    if (!approved) {
+      setMessages(prev => prev.map((message, messageIndex) => (
+        messageIndex === index
+          ? { ...message, toolStatus: 'denied', content: `${action.label} cancelled.` }
+          : message
+      )))
+      return
+    }
+
+    setMessages(prev => prev.map((message, messageIndex) => (
+      messageIndex === index ? { ...message, toolStatus: 'running' } : message
+    )))
+
+    const confirmedRequest = `${sourceRequest}\nconfirmed=true`
+    const displayMessage = `Confirmed ${action.kind === 'email' ? 'email' : 'WhatsApp'} to ${action.target}`
+    await send(confirmedRequest, false, { displayMessage, mode: 'instant' })
+
+    setMessages(prev => prev.map((message, messageIndex) => (
+      messageIndex === index ? { ...message, toolStatus: 'approved' } : message
+    )))
   }
 
   async function startRecording(mode: Exclude<ListeningMode, null>) {
@@ -179,7 +283,7 @@ export default function Chat() {
     analyser.fftSize = 512
     audioContext.createMediaStreamSource(stream).connect(analyser)
     const samples = new Uint8Array(analyser.fftSize)
-    const startedAt = Date.now()
+    const startedAt = nowMs()
     let heardVoice = false
     let quietSince = 0
 
@@ -193,7 +297,7 @@ export default function Chat() {
         const normalized = (value - 128) / 128
         return sum + normalized * normalized
       }, 0) / samples.length)
-      const now = Date.now()
+      const now = nowMs()
       if (rms > 0.035) {
         heardVoice = true
         quietSince = 0
@@ -271,33 +375,27 @@ export default function Chat() {
   }
 
   function speak(text: string) {
-    return new Promise<void>(resolve => {
-      if (!('speechSynthesis' in window)) {
-        resolve()
-        return
-      }
-      window.speechSynthesis.cancel()
-      const utterance = new SpeechSynthesisUtterance(text)
-      utterance.rate = 0.96
-      utterance.pitch = 0.94
-      utterance.onstart = () => {
+    return speakLocalized(text, {
+      rate: 0.96,
+      pitch: 0.94,
+      onStart: () => {
         setVoicePhase('speaking')
         setVoiceNotice('Voice agent is speaking...')
-      }
-      utterance.onend = () => resolve()
-      utterance.onerror = () => resolve()
-      window.speechSynthesis.speak(utterance)
+      },
     })
   }
 
-  async function attachFile(file?: File) {
-    if (!file) return
+  async function attachFiles(fileList?: FileList | null) {
+    const files = Array.from(fileList ?? [])
+    if (!files.length) return
     setVoiceNotice('')
     try {
-      const content = (await file.text()).slice(0, 20_000)
-      setAttachment({ name: file.name, content })
+      setVoiceNotice('Extracting text from attachments...')
+      const extracted = await extractAttachments(files)
+      setAttachments(prev => [...prev, ...extracted])
+      setVoiceNotice(`${extracted.length} attachment${extracted.length > 1 ? 's' : ''} ready.`)
     } catch {
-      setVoiceNotice('That file could not be attached.')
+      setVoiceNotice('Those files could not be attached.')
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
@@ -326,9 +424,20 @@ export default function Chat() {
                 {message.role === 'assistant' && (
                   <div className="message-avatar"><Bot className="h-4 w-4" /></div>
                 )}
-                <div className={`message-bubble ${message.role === 'user' ? 'message-bubble-user' : ''}`}>
-                  {message.content || (loading && index === messages.length - 1 ? 'Thinking...' : '')}
-                </div>
+                {message.role === 'assistant' ? (
+                  <AssistantMessage
+                    message={message}
+                    isStreaming={loading && index === messages.length - 1}
+                    onToolDecision={(action, approved) => void handleToolDecision(index, action, approved)}
+                  />
+                ) : (
+                  <div
+                    className={`message-bubble message-bubble-user ${isRtl(message.content) ? 'message-bubble-rtl' : ''}`}
+                    dir={isRtl(message.content) ? 'rtl' : 'ltr'}
+                  >
+                    {message.content}
+                  </div>
+                )}
                 {message.role === 'user' && (
                   <div className="message-avatar message-avatar-user"><User className="h-4 w-4" /></div>
                 )}
@@ -344,31 +453,36 @@ export default function Chat() {
               ref={fileInputRef}
               className="composer-file-input"
               type="file"
-              accept=".txt,.md,.csv,.json,text/plain,text/markdown,text/csv,application/json"
-              onChange={event => void attachFile(event.target.files?.[0])}
+              multiple
+              accept=".txt,.md,.csv,.json,.png,.jpg,.jpeg,.webp,.wav,.mp3,.m4a,.webm,.ogg,text/plain,text/markdown,text/csv,application/json,image/*,audio/*"
+              onChange={event => void attachFiles(event.target.files)}
             />
             <button
               className="composer-icon-button composer-plus"
               onClick={() => fileInputRef.current?.click()}
-              aria-label="Attach text file"
-              title="Attach text file"
+              aria-label="Attach files"
+              title="Attach text, image, or audio files"
             >
               <Plus className="h-5 w-5" />
             </button>
 
             <div className="composer-entry">
-              {attachment && (
-                <div className="composer-attachment">
+              {attachments.slice(0, 3).map((file, fileIndex) => (
+                <div className="composer-attachment" key={`${file.name}-${fileIndex}`} title={file.error || file.name}>
                   <Paperclip className="h-3 w-3" />
-                  <span>{attachment.name}</span>
-                  <button onClick={() => setAttachment(null)} aria-label="Remove attachment">
+                  <span>{file.kind}: {file.name}</span>
+                  <button
+                    onClick={() => setAttachments(prev => prev.filter((_, index) => index !== fileIndex))}
+                    aria-label={`Remove ${file.name}`}
+                  >
                     <X className="h-3 w-3" />
                   </button>
                 </div>
-              )}
+              ))}
+              {attachments.length > 3 && <span className="composer-attachment-more">+{attachments.length - 3}</span>}
               <input
                 className="composer-input"
-                placeholder={isListening ? 'Listening...' : 'Ask WealthMesh anything'}
+                placeholder={isListening ? 'Listening...' : 'Ask LaRuche anything'}
                 value={input}
                 onChange={event => setInput(event.target.value)}
                 onKeyDown={event => {
@@ -405,11 +519,11 @@ export default function Chat() {
                 <span className="mini-wave" aria-hidden="true"><i /><i /><i /><i /></span>
                 End
               </button>
-            ) : input.trim() || attachment ? (
+            ) : input.trim() || attachments.length ? (
               <button
                 className="composer-primary"
                 onClick={() => void send()}
-                disabled={loading || !input.trim()}
+                disabled={loading || (!input.trim() && !attachments.length)}
                 aria-label="Send message"
               >
                 <Send className="h-5 w-5" />
@@ -431,10 +545,189 @@ export default function Chat() {
                 ? 'Dictating only. Press the microphone again to convert your speech into text.'
                 : voicePhase === 'listening'
                   ? 'Voice agent is listening and will answer aloud.'
-                : 'WealthMesh can make mistakes. Verify important financial information.')}
+                : 'LaRuche can make mistakes. Verify important financial information.')}
           </p>
         </div>
       </section>
     </div>
   )
+}
+
+function AssistantMessage({
+  message,
+  isStreaming,
+  onToolDecision,
+}: {
+  message: UiChatMessage
+  isStreaming: boolean
+  onToolDecision: (action: ToolConfirmation, approved: boolean) => void
+}) {
+  const parsed = parseDeepResponse(message.content)
+  const reasoningText = message.reasoning || parsed.reasoningText
+  const shouldUseReasoningUi = message.responseMode === 'deep' && Boolean(reasoningText)
+  const finalContent = parsed.hasReasoning ? parsed.finalAnswer : message.content
+  const toolConfirmation = message.toolConfirmation ?? parseToolConfirmation(finalContent)
+  const isRtlMessage = isRtl(finalContent)
+
+  return (
+    <div
+      className={`message-bubble ${isRtlMessage ? 'message-bubble-rtl' : ''}`}
+      dir={isRtlMessage ? 'rtl' : 'ltr'}
+    >
+      {shouldUseReasoningUi && (
+        parsed.finalAnswer ? (
+          <details className="reasoning-collapse">
+            <summary>
+              <span className="reasoning-dot" />
+              Reasoning for {formatReasoningDuration(message)}
+            </summary>
+            <div className="reasoning-details">{reasoningText}</div>
+          </details>
+        ) : (
+          <div className="reasoning-live">
+            <span className="reasoning-dot reasoning-dot-live" />
+            <div>
+              <strong>Thinking...</strong>
+              <p>{reasoningText || 'Building a plan, checking the available data, and preparing a clean answer.'}</p>
+            </div>
+          </div>
+        )
+      )}
+      {toolConfirmation ? (
+        <ToolConfirmationCard
+          action={toolConfirmation}
+          status={message.toolStatus ?? 'pending'}
+          onApprove={() => onToolDecision(toolConfirmation, true)}
+          onDeny={() => onToolDecision(toolConfirmation, false)}
+        />
+      ) : (
+        <div className="assistant-answer">
+          {finalContent || (isStreaming ? 'Thinking...' : '')}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ToolConfirmationCard({
+  action,
+  status,
+  onApprove,
+  onDeny,
+}: {
+  action: ToolConfirmation
+  status: ToolStatus
+  onApprove: () => void
+  onDeny: () => void
+}) {
+  const Icon = action.kind === 'email' ? Mail : MessageCircle
+  const isPending = status === 'pending'
+
+  return (
+    <div className={`tool-confirm-card tool-confirm-card-${status}`}>
+      <div className="tool-confirm-icon">
+        <Icon className="h-4 w-4" />
+      </div>
+      <div className="tool-confirm-body">
+        <div className="tool-confirm-kicker">Tool confirmation</div>
+        <h3>{action.label}</h3>
+        <p>
+          LaRuche is asking permission before it uses this external action.
+          {action.kind === 'email' ? ' The message will be sent by the configured email service.' : ' The WhatsApp action is currently logged by the dev stub.'}
+        </p>
+        <div className="tool-confirm-target">
+          <span>Destination</span>
+          <strong>{action.target}</strong>
+        </div>
+        {isPending ? (
+          <div className="tool-confirm-actions">
+            <button className="tool-confirm-deny" onClick={onDeny}>
+              <X className="h-4 w-4" />
+              Deny
+            </button>
+            <button className="tool-confirm-approve" onClick={onApprove}>
+              <Check className="h-4 w-4" />
+              Confirm
+            </button>
+          </div>
+        ) : (
+          <div className="tool-confirm-status">
+            {status === 'running' && 'Running action...'}
+            {status === 'approved' && 'Approved. The confirmed request was submitted; see the tool result below.'}
+            {status === 'denied' && 'Denied. No action was sent.'}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function parseDeepResponse(content: string) {
+  const finalMarker = 'Final answer'
+  const reasoningStart = content.indexOf('Reasoning summary')
+  const finalStart = content.indexOf(finalMarker)
+
+  if (reasoningStart === -1 && finalStart === -1) {
+    return { hasReasoning: false, reasoningText: '', finalAnswer: content }
+  }
+
+  const reasoningEnd = finalStart === -1 ? content.length : finalStart
+  const reasoningText = content
+    .slice(reasoningStart === -1 ? 0 : reasoningStart, reasoningEnd)
+    .replace(/^Reasoning summary\s*/i, '')
+    .trim()
+  const finalAnswer = finalStart === -1
+    ? ''
+    : content.slice(finalStart + finalMarker.length).trim()
+
+  return { hasReasoning: true, reasoningText, finalAnswer }
+}
+
+function parseToolConfirmation(content: string): ToolConfirmation | null {
+  const emailMatch = content.match(/Confirm email to\s+([^?\s]+)\?\s*Set confirmed=true to send\./i)
+  if (emailMatch?.[1]) {
+    return {
+      kind: 'email',
+      target: emailMatch[1],
+      label: 'Send email',
+    }
+  }
+
+  const whatsappMatch = content.match(/Confirm WhatsApp to\s+(.+?)\?\s*Set confirmed=true\.?/i)
+  if (whatsappMatch?.[1]) {
+    return {
+      kind: 'whatsapp',
+      target: whatsappMatch[1].trim(),
+      label: 'Send WhatsApp',
+    }
+  }
+
+  return null
+}
+
+function buildActionContext(message: string, history: UiChatMessage[]) {
+  if (!isActionRequest(message)) return ''
+  if (!/\b(?:this|it|that|those informations?|these informations?|previous answer|last answer)\b/i.test(message)) {
+    return ''
+  }
+
+  const previousAnswer = [...history]
+    .reverse()
+    .find(item => item.role === 'assistant' && item.content.trim() && !parseToolConfirmation(item.content))
+    ?.content
+    .trim()
+
+  if (!previousAnswer) return ''
+  return `\n\nContent to send:\n${previousAnswer}`
+}
+
+function isActionRequest(message: string) {
+  return /\b(?:send|email|mail|whatsapp|notify|share)\b/i.test(message)
+}
+
+function formatReasoningDuration(message: UiChatMessage) {
+  if (!message.startedAt) return 'a moment'
+  const finishedAt = message.completedAt ?? nowMs()
+  const seconds = Math.max(1, Math.round((finishedAt - message.startedAt) / 1000))
+  return `${seconds}s`
 }

@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import pytest
-from agent_docs.main import DocIngestTool, RAGSearchTool, _search_documents, app
+from agent_docs.main import (
+    DocIngestTool,
+    RAGSearchTool,
+    _extract_attachment_context,
+    _search_documents,
+    app,
+)
 from agent_docs.vector_store import chunk_text
 from fastapi.testclient import TestClient
 
@@ -37,6 +43,11 @@ def test_chunk_text_preserves_all_content():
     assert len(chunks) > 1
     assert chunks[0].startswith("word-0")
     assert chunks[-1].endswith("word-299")
+
+
+def test_extract_attachment_context():
+    message = "Please analyze.\n\nAttached file context:\nnote.txt\nAUM is $123M"
+    assert "AUM is $123M" in _extract_attachment_context(message)
 
 
 async def test_qdrant_search_path(monkeypatch: pytest.MonkeyPatch):

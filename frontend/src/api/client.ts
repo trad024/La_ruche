@@ -57,6 +57,12 @@ export interface VoiceChatResult {
   answer_audio_b64: string
   conversation_id: string
 }
+export interface ExtractedAttachment {
+  name: string
+  kind: 'text' | 'image' | 'audio' | 'unsupported'
+  content: string
+  error?: string
+}
 
 export const getPortfolioSummary = () =>
   api.get<PortfolioSummary>('/api/portfolio/summary').then(r => r.data)
@@ -74,6 +80,16 @@ export async function transcribeAudio(audio: Blob) {
     body,
   )
   return data
+}
+
+export async function extractAttachments(files: File[]) {
+  const body = new FormData()
+  files.forEach(file => body.append('files', file, file.name))
+  const { data } = await api.post<{ attachments: ExtractedAttachment[] }>(
+    '/api/attachments/extract',
+    body,
+  )
+  return data.attachments
 }
 
 export async function synthesizeSpeech(text: string) {
@@ -101,7 +117,9 @@ export async function* streamChat(
   message: string,
   conversationId: string,
   token: string | null,
-): AsyncGenerator<string> {
+  mode: 'instant' | 'deep' = 'instant',
+  displayMessage = message,
+): AsyncGenerator<{ type: 'token' | 'reasoning'; content: string }> {
   const base = import.meta.env.VITE_API_URL ?? ''
   const resp = await fetch(`${base}/api/chat`, {
     method: 'POST',
@@ -109,7 +127,7 @@ export async function* streamChat(
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ message, conversation_id: conversationId }),
+    body: JSON.stringify({ message, display_message: displayMessage, conversation_id: conversationId, mode }),
   })
 
   if (!resp.ok || !resp.body) throw new Error(`Chat error: ${resp.status}`)
@@ -128,7 +146,8 @@ export async function* streamChat(
       if (line.startsWith('data: ') && !line.includes('[DONE]')) {
         try {
           const payload = JSON.parse(line.slice(6))
-          if (payload.token) yield payload.token
+          if (payload.reasoning) yield { type: 'reasoning', content: payload.reasoning }
+          if (payload.token) yield { type: 'token', content: payload.token }
         } catch {
           // ignore parse errors
         }

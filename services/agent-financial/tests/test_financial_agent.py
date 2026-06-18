@@ -40,6 +40,11 @@ def test_route_default():
     assert tools[0][0] == "portfolio.summary"
 
 
+def test_route_misspelled_portfolio_uses_summary():
+    tools = _pick_tools("what is my portiflio ?\n\nResponse format: include risks")
+    assert tools == [("portfolio.summary", {})]
+
+
 # ── Tool execution ─────────────────────────────────────────────────────────────
 
 

@@ -82,6 +82,8 @@ export default function ChatScreen() {
 
       <View style={s.inputRow}>
         <TextInput
+          testID="chat-input"
+          accessibilityLabel="chat-input"
           style={s.input}
           placeholder="Ask about your portfolio..."
           placeholderTextColor="#64748b"
@@ -91,7 +93,12 @@ export default function ChatScreen() {
           editable={!loading}
           returnKeyType="send"
         />
-        <TouchableOpacity style={[s.sendBtn, (loading || !input.trim()) && s.sendDisabled]} onPress={send}>
+        <TouchableOpacity
+          testID="chat-send"
+          accessibilityLabel="chat-send"
+          style={[s.sendBtn, (loading || !input.trim()) && s.sendDisabled]}
+          onPress={send}
+        >
           <Text style={s.sendText}>→</Text>
         </TouchableOpacity>
       </View>

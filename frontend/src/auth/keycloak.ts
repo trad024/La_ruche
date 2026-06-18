@@ -10,7 +10,11 @@ let initialization: Promise<boolean> | null = null
 
 export function initializeKeycloak() {
   if (!initialization) {
-    initialization = _kc.init({ onLoad: 'check-sso', pkceMethod: 'S256' })
+    initialization = _kc.init({
+      onLoad: 'check-sso',
+      pkceMethod: 'S256',
+      checkLoginIframe: false,
+    })
   }
   return initialization
 }

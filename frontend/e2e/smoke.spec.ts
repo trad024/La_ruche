@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test'
 
 /**
- * Smoke + content tests for the WealthMesh web app.
+ * Smoke + content tests for the LaRuche web app.
  * Validates the four screens render and surfaces the data shown in the UI
  * so it can be compared against the canonical demo data.
  */
@@ -23,11 +23,14 @@ test('dashboard renders the KPI cards', async ({ page }) => {
   await goto(page, '/')
   await expect(page.getByRole('heading', { name: 'Portfolio Overview' })).toBeVisible()
   await expect(page.getByText('$20.4M')).toBeVisible()
-  await expect(page.getByText('178.65%')).toBeVisible()
+  await expect(page.getByText('19.65%')).toBeVisible()
   await expect(page.getByText('0.58')).toBeVisible()
+  await page.getByRole('button', { name: '1M' }).click()
+  await expect(page.getByRole('button', { name: '1M' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByText('Last 30 days')).toBeVisible()
   // Geographic + sector breakdowns present
   await expect(page.getByText('Geographic Allocation')).toBeVisible()
-  await expect(page.getByText('Sector Allocation')).toBeVisible()
+  await expect(page.getByText('Sector Mix')).toBeVisible()
   await page.screenshot({ path: 'e2e/__screens__/dashboard.png' })
 })
 
@@ -51,12 +54,17 @@ test('market page renders quotes and indicators', async ({ page }) => {
 test('chat page renders and accepts input', async ({ page }) => {
   await goto(page, '/chat')
   await expect(page.getByRole('heading', { name: 'AI Assistant' })).toBeVisible()
-  const input = page.getByPlaceholder(/Ask WealthMesh anything/i)
+  const input = page.getByPlaceholder(/Ask LaRuche anything/i)
   await expect(input).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Attach text file' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Attach files' })).toBeVisible()
+  const fileInput = page.locator('input[type="file"]')
+  await expect(fileInput).toHaveAttribute('multiple', '')
+  await expect(fileInput).toHaveAttribute('accept', /image\/\*.*audio\/\*/)
   await expect(page.getByRole('button', { name: 'Dictate message' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Start voice conversation' })).toBeVisible()
   await expect(page.getByRole('combobox', { name: 'Response mode' })).toHaveValue('instant')
+  await page.getByRole('combobox', { name: 'Response mode' }).selectOption('deep')
+  await expect(page.getByRole('combobox', { name: 'Response mode' })).toHaveValue('deep')
   await input.fill('What is my portfolio AUM?')
   await expect(page.getByRole('button', { name: 'Send message' })).toBeVisible()
   await page.screenshot({ path: 'e2e/__screens__/chat.png' })

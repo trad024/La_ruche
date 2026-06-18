@@ -6,9 +6,12 @@ All outbound actions require explicit confirmation. Audit-logged.
 from __future__ import annotations
 
 import os
+import re
 import smtplib
 from datetime import UTC, datetime
-from email.mime.text import MIMEText
+from email.message import EmailMessage
+from email.utils import formataddr
+from html import escape
 from typing import Any
 
 from agentkit.a2a.models import A2ATask, AgentCard, AgentSkill
@@ -16,17 +19,135 @@ from agentkit.a2a.router import a2a_router
 from agentkit.mcp.registry import MCPRegistry
 from agentkit.mcp.tool import MCPTool, ToolResult
 from agentkit.tracing import trace_span
+from dotenv import load_dotenv
 from fastapi import FastAPI
+
+load_dotenv()
+load_dotenv(".env.local", override=True)
 
 _SMTP_HOST = os.getenv("SMTP_HOST", "mailhog")
 _SMTP_PORT = int(os.getenv("SMTP_PORT", "1025"))
 _FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@wealthmesh.local")
+_FROM_NAME = os.getenv("FROM_NAME", "LaRuche Advisor")
+_SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
+_SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+_SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "false").lower() in {"1", "true", "yes", "on"}
+_SMTP_SSL = os.getenv("SMTP_SSL", "false").lower() in {"1", "true", "yes", "on"}
 
 _AUDIT_LOG: list[dict[str, Any]] = []
+_EMAIL_RE = re.compile(r"[\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)+")
+_PHONE_RE = re.compile(r"\+?\d[\d\s().-]{6,}\d")
+_CONTENT_MARKER = "Content to send:"
+
+
+def _is_confirmed(message: str) -> bool:
+    return bool(re.search(r"\bconfirmed\s*=\s*true\b", message, re.IGNORECASE))
 
 
 def _audit(action: str, details: dict[str, Any]) -> None:
     _AUDIT_LOG.append({"timestamp": datetime.now(UTC).isoformat(), "action": action, **details})
+
+
+def _smtp_hosts() -> list[str]:
+    if _SMTP_USERNAME or _SMTP_PASSWORD:
+        return [_SMTP_HOST]
+    hosts = [_SMTP_HOST]
+    for fallback in ("localhost", "127.0.0.1"):
+        if fallback not in hosts:
+            hosts.append(fallback)
+    return hosts
+
+
+def _smtp_unavailable_message(last_error: Exception) -> str:
+    return (
+        "Email could not be sent because the SMTP service is unavailable. "
+        f"Tried {', '.join(_smtp_hosts())}:{_SMTP_PORT}. "
+        "Start MailHog/Docker Desktop for local capture, or configure a real SMTP server "
+        f"with SMTP_HOST and SMTP_PORT. Last error: {last_error}"
+    )
+
+
+def _is_local_capture(host: str) -> bool:
+    return _SMTP_PORT == 1025 and host in {"mailhog", "localhost", "127.0.0.1"}
+
+
+def _uses_authenticated_smtp() -> bool:
+    return bool(_SMTP_USERNAME or _SMTP_PASSWORD)
+
+
+def _smtp_connect(host: str) -> smtplib.SMTP:
+    if _SMTP_SSL or _SMTP_PORT == 465:
+        smtp: smtplib.SMTP = smtplib.SMTP_SSL(host, _SMTP_PORT, timeout=15)
+    else:
+        smtp = smtplib.SMTP(host, _SMTP_PORT, timeout=15)
+        if _SMTP_STARTTLS or _SMTP_PORT == 587:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.ehlo()
+    if _SMTP_USERNAME or _SMTP_PASSWORD:
+        smtp.login(_SMTP_USERNAME, _SMTP_PASSWORD)
+    return smtp
+
+
+def _plain_to_html(text: str) -> str:
+    paragraphs = [part.strip() for part in re.split(r"\n{2,}", text.strip()) if part.strip()]
+    if not paragraphs:
+        paragraphs = ["Please see your LaRuche advisory update below."]
+    body = "\n".join(
+        f"<p>{escape(paragraph).replace(chr(10), '<br>')}</p>" for paragraph in paragraphs
+    )
+    return f"""<!doctype html>
+<html>
+  <body style="margin:0;background:#062b29;padding:28px;font-family:Inter,Segoe UI,Arial,sans-serif;color:#ecfffb;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;margin:0 auto;background:#082f2d;border:1px solid rgba(53,199,190,.28);border-radius:24px;overflow:hidden;">
+      <tr>
+        <td style="padding:28px 30px;background:linear-gradient(135deg,#0f4b46,#092f2c);border-bottom:1px solid rgba(255,255,255,.08);">
+          <div style="font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:#35c7be;font-weight:800;">LaRuche</div>
+          <h1 style="margin:8px 0 0;font-size:28px;line-height:1.15;color:#ffffff;">Private Wealth Intelligence</h1>
+          <p style="margin:10px 0 0;color:#9ec4bd;font-size:14px;">Advisor summary prepared from your LaRuche assistant conversation.</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:28px 30px;">
+          <div style="padding:18px 18px;border-radius:18px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);font-size:15px;line-height:1.75;color:#ecfffb;">
+            {body}
+          </div>
+          <div style="margin-top:20px;padding:14px 16px;border-radius:14px;background:rgba(245,166,35,.12);border:1px solid rgba(245,166,35,.22);color:#ffdca6;font-size:12px;line-height:1.55;">
+            LaRuche can make mistakes. Verify important financial information before making decisions.
+          </div>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:18px 30px;color:#7da7a0;font-size:12px;border-top:1px solid rgba(255,255,255,.08);">
+          Sent by LaRuche Advisor
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>"""
+
+
+def _build_email(to: str, subject: str, body: str) -> EmailMessage:
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = formataddr((_FROM_NAME, _FROM_EMAIL))
+    msg["To"] = to
+    msg.set_content(body)
+    msg.add_alternative(_plain_to_html(body), subtype="html")
+    return msg
+
+
+def _extract_content_to_send(message: str) -> str:
+    index = message.lower().find(_CONTENT_MARKER.lower())
+    if index == -1:
+        return ""
+
+    content = message[index + len(_CONTENT_MARKER) :]
+    for marker in ("\n\nResponse format:", "\n\nAdvisor style:", "\nconfirmed=true"):
+        marker_index = content.find(marker)
+        if marker_index != -1:
+            content = content[:marker_index]
+    return content.strip()
 
 
 class ReportBuildTool(MCPTool):
@@ -102,17 +223,34 @@ class EmailSendTool(MCPTool):
     ) -> ToolResult:
         if not confirmed:
             return ToolResult(content=f"Confirm email to {to}? Set confirmed=true to send.")
-        try:
-            msg = MIMEText(body)
-            msg["Subject"] = subject
-            msg["From"] = _FROM_EMAIL
-            msg["To"] = to
-            with smtplib.SMTP(_SMTP_HOST, _SMTP_PORT, timeout=5) as s:
-                s.sendmail(_FROM_EMAIL, [to], msg.as_string())
-            _audit("email.send", {"to": to, "subject": subject})
-            return ToolResult(content=f"Email sent to {to}: '{subject}'")
-        except Exception as exc:
-            return ToolResult(content=f"Email queued (SMTP not available: {exc})")
+        msg = _build_email(to, subject, body)
+        last_error: Exception | None = None
+        for host in _smtp_hosts():
+            try:
+                with _smtp_connect(host) as s:
+                    s.sendmail(_FROM_EMAIL, [to], msg.as_string())
+                _audit(
+                    "email.send",
+                    {
+                        "to": to,
+                        "subject": subject,
+                        "smtp_host": host,
+                        "authenticated": _uses_authenticated_smtp(),
+                    },
+                )
+                if _is_local_capture(host):
+                    return ToolResult(
+                        content=(
+                            f"Email captured in local MailHog for {to}: '{subject}'. "
+                            "Open http://localhost:8025 to view it. It was not delivered to the real inbox."
+                        )
+                    )
+                return ToolResult(content=f"Email sent to {to}: '{subject}'")
+            except Exception as exc:
+                last_error = exc
+        if last_error:
+            return ToolResult(content=_smtp_unavailable_message(last_error))
+        return ToolResult(content="Email could not be sent because no SMTP host was available.")
 
 
 class WhatsAppSendTool(MCPTool):
@@ -159,18 +297,22 @@ _registry.register(WhatsAppSendTool())
 
 def _pick(msg: str) -> tuple[str, dict[str, Any]]:
     lower = msg.lower()
-    if "email" in lower or "send" in lower:
-        return "email.send", {
-            "to": "client@wealthmesh.local",
-            "subject": "Portfolio Report",
-            "body": "Please see your portfolio report.",
-            "confirmed": False,
-        }
+    confirmed = _is_confirmed(msg)
+    content_to_send = _extract_content_to_send(msg)
     if "whatsapp" in lower:
+        recipient = _PHONE_RE.search(msg)
         return "whatsapp.send", {
-            "to": "+1234567890",
-            "message": "Your portfolio report is ready.",
-            "confirmed": False,
+            "to": recipient.group(0).strip() if recipient else "+1234567890",
+            "message": content_to_send or "Your portfolio report is ready.",
+            "confirmed": confirmed,
+        }
+    if "email" in lower or "send" in lower:
+        recipient = _EMAIL_RE.search(msg)
+        return "email.send", {
+            "to": recipient.group(0) if recipient else "client@wealthmesh.local",
+            "subject": "LaRuche portfolio summary" if content_to_send else "Portfolio Report",
+            "body": content_to_send or "Please see your portfolio report.",
+            "confirmed": confirmed,
         }
     return "report.build", {}
 

@@ -2,21 +2,20 @@ import { type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard,
-  MessageSquare,
-  BarChart3,
-  TrendingUp,
-  LogOut,
-  AudioLines,
-  ShieldCheck,
+  Briefcase,
+  CandlestickChart,
   Sparkles,
+  AudioLines,
+  LogOut,
+  ShieldCheck,
 } from 'lucide-react'
 import { useAuth } from '../auth/useAuth'
 
 const NAV = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/portfolio', label: 'Portfolio', icon: BarChart3 },
-  { to: '/market', label: 'Market', icon: TrendingUp },
-  { to: '/chat', label: 'AI Chat', icon: MessageSquare },
+  { to: '/', label: 'Overview', icon: LayoutDashboard },
+  { to: '/portfolio', label: 'Portfolio', icon: Briefcase },
+  { to: '/market', label: 'Markets', icon: CandlestickChart },
+  { to: '/chat', label: 'AI Assistant', icon: Sparkles },
   { to: '/voice', label: 'Voice Studio', icon: AudioLines },
 ]
 
@@ -27,10 +26,10 @@ export default function Layout({ children }: { children: ReactNode }) {
     <div className="app-shell">
       <nav className="sidebar">
         <div className="brand-block">
-          <div className="brand-mark"><Sparkles className="h-4 w-4" /></div>
+          <img className="brand-mark brand-mark-image" src="/brand/laruche-mark.png" alt="LaRuche" />
           <div>
-            <h1 className="brand-name">WealthMesh</h1>
-            <p className="brand-caption">Private intelligence</p>
+            <h1 className="brand-name">LaRuche</h1>
+            <p className="brand-caption">Private Wealth Intelligence</p>
           </div>
         </div>
 

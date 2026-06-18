@@ -10,6 +10,7 @@ members = [
     "services/agent-qa",
     "services/voice",
     "eval",
+    "qa-swarm",
 ]
 
 [tool.ruff]
@@ -38,6 +39,7 @@ testpaths = [
     "services/agent-action/tests",
     "services/agent-qa/tests",
     "eval/tests",
+    "qa-swarm/tests",
 ]
 
 [dependency-groups]

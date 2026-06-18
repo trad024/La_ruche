@@ -30,6 +30,7 @@ def _merge_list(a: list[Any], b: list[Any]) -> list[Any]:
 
 class MeshState(TypedDict):
     user_message: str
+    execution_message: str
     conversation_id: str
     user_id: str
     routed_agents: Annotated[list[str], _merge_list]
@@ -93,6 +94,13 @@ _ROUTING_RULES: list[tuple[str, list[str]]] = [
         "docs",
         [
             "document",
+            "documents",
+            "uploaded",
+            "attached",
+            "attachment",
+            "attachments",
+            "file",
+            "files",
             "pdf",
             "report",
             "extract",
@@ -112,10 +120,52 @@ _ROUTING_RULES: list[tuple[str, list[str]]] = [
 ]
 
 _GREETING_RE = re.compile(
-    r"^\s*(?:hi|hello|hey|good\s+(?:morning|afternoon|evening)|howdy)"
-    r"(?:\s+(?:there|advisor|wealthmesh))?[!.?\s]*$",
+    r"^\s*(?:hi|hello|hey|good\s+(?:morning|afternoon|evening)|howdy)[,\s]*"
+    r"(?:\s+(?:there|advisor|wealthmesh|ladies\s+and\s+gentlemen))?[!.?\s]*$",
     re.IGNORECASE,
 )
+_ATTACHMENT_REFERENCE_RE = re.compile(
+    r"\b(?:uploaded|attached|attachment|attachments|file|files|document|documents|pdf|image|audio|voice)\b",
+    re.IGNORECASE,
+)
+_ATTACHMENT_CONTEXT_MARKER = "attached file context:"
+
+
+def _has_attachment_context(message: str) -> bool:
+    return _ATTACHMENT_CONTEXT_MARKER in message.lower()
+
+
+def _needs_attachment_context(user_message: str, execution_message: str = "") -> bool:
+    if _has_attachment_context(execution_message or user_message):
+        return False
+    lower = user_message.lower()
+    intent_words = (
+        "summarize",
+        "analyse",
+        "analyze",
+        "read",
+        "extract",
+        "find",
+        "search",
+        "uploaded",
+        "attached",
+    )
+    return bool(_ATTACHMENT_REFERENCE_RE.search(user_message)) and any(
+        word in lower for word in intent_words
+    )
+
+
+def _sanitize_answer(answer: str) -> str:
+    cleaned = answer.replace("[Your Name]", "LaRuche")
+    cleaned = cleaned.replace(
+        "information technology date-to-date time-weighted return",
+        "inception-to-date time-weighted return",
+    )
+    cleaned = cleaned.replace("ITD TWR", "inception-to-date TWR")
+    cleaned = re.sub(
+        r"\n?\s*Best regards,?\s*(?:\n\s*LaRuche)?\s*$", "", cleaned, flags=re.IGNORECASE
+    )
+    return cleaned.strip()
 
 
 def _route(message: str) -> list[str]:
@@ -140,6 +190,8 @@ def _route(message: str) -> list[str]:
 
 
 async def router_node(state: MeshState) -> dict[str, Any]:
+    if _needs_attachment_context(state["user_message"], state.get("execution_message", "")):
+        return {"routed_agents": []}
     agents = _route(state["user_message"])
     return {"routed_agents": agents}
 
@@ -153,7 +205,11 @@ async def _call_agent(agent: str, state: MeshState) -> dict[str, Any]:
             task = A2ATask(
                 skill_id="chat",
                 sender_id="orchestrator",
-                messages=[A2AMessage(role="user", content=state["user_message"])],
+                messages=[
+                    A2AMessage(
+                        role="user", content=state.get("execution_message") or state["user_message"]
+                    )
+                ],
                 context={
                     "conversation_id": state["conversation_id"],
                     "user_id": state["user_id"],
@@ -173,6 +229,14 @@ async def agents_node(state: MeshState) -> dict[str, Any]:
 
 
 def aggregate_node(state: MeshState) -> dict[str, Any]:
+    if _needs_attachment_context(state["user_message"], state.get("execution_message", "")):
+        return {
+            "final_answer": (
+                "I don't see any uploaded file context yet. Attach your documents, images, "
+                "or audio files with the plus button, then ask me to summarize or analyze them."
+            )
+        }
+
     if not state["routed_agents"] and _GREETING_RE.fullmatch(state["user_message"]):
         return {
             "final_answer": (
@@ -186,6 +250,7 @@ def aggregate_node(state: MeshState) -> dict[str, Any]:
         if not r.get("error") and r.get("output"):
             parts.append(r["output"])
     answer = "\n\n".join(parts) if parts else "I was unable to retrieve that information."
+    answer = _sanitize_answer(answer)
     return {"final_answer": answer}
 
 
@@ -211,10 +276,12 @@ async def run_turn(
     message: str,
     conversation_id: str = "default",
     user_id: str = "anon",
+    execution_message: str | None = None,
 ) -> AsyncIterator[str]:
     """Stream the answer token-by-token (currently yields the full answer)."""
     state: MeshState = {
         "user_message": message,
+        "execution_message": execution_message or message,
         "conversation_id": conversation_id,
         "user_id": user_id,
         "routed_agents": [],
@@ -226,3 +293,117 @@ async def run_turn(
     # Yield word-by-word for a streaming feel
     for word in answer.split(" "):
         yield word + " "
+
+
+def _planning_summary(message: str, agents: list[str]) -> str:
+    areas = ", ".join(agents) if agents else "direct advisory response"
+    checklist = [
+        "Identify the user's requested decision or fact.",
+        f"Route evidence gathering through: {areas}.",
+        "Ground the answer in retrieved portfolio, market, or document data.",
+        "Check for missing assumptions, stale data, and unsupported claims.",
+    ]
+    return "\n".join(f"- {item}" for item in checklist)
+
+
+def _critique_answer(answer: str, agent_results: list[dict[str, Any]]) -> str:
+    checks: list[str] = []
+    if any(result.get("error") for result in agent_results):
+        checks.append("One or more specialist agents were unavailable; mention any uncertainty.")
+    if answer == "I was unable to retrieve that information.":
+        checks.append(
+            "No grounded data was retrieved; ask for a clearer question or relevant files."
+        )
+    if "[Your Name]" in answer or "Best regards" in answer:
+        checks.append("Remove letter-style signoffs and identity placeholders.")
+    if not checks:
+        checks.append(
+            "Answer is grounded in available specialist output and cleaned for presentation."
+        )
+    return "\n".join(f"- {item}" for item in checks)
+
+
+def _finalize_deep_answer(answer: str, plan: str, critique: str) -> str:
+    conclusion = answer if answer == "I was unable to retrieve that information." else answer
+    return _sanitize_answer(
+        "Reasoning summary\n"
+        f"{plan}\n\n"
+        "Checks performed\n"
+        f"{critique}\n\n"
+        "Final answer\n"
+        f"{conclusion}"
+    )
+
+
+async def run_deep_turn_payloads(
+    message: str,
+    conversation_id: str = "default",
+    user_id: str = "anon",
+    execution_message: str | None = None,
+) -> AsyncIterator[dict[str, str]]:
+    """Run a planner -> specialist execution -> critic -> finalizer wrapper."""
+    if _needs_attachment_context(message, execution_message or ""):
+        answer = aggregate_node(
+            {
+                "user_message": message,
+                "execution_message": execution_message or message,
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "routed_agents": [],
+                "agent_results": [],
+                "final_answer": "",
+            }
+        )
+        for word in answer["final_answer"].split(" "):
+            yield {"type": "token", "content": word + " "}
+        return
+
+    agents = _route(message)
+    if not agents and _GREETING_RE.fullmatch(message):
+        answer = aggregate_node(
+            {
+                "user_message": message,
+                "execution_message": execution_message or message,
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "routed_agents": [],
+                "agent_results": [],
+                "final_answer": "",
+            }
+        )
+        for word in answer["final_answer"].split(" "):
+            yield {"type": "token", "content": word + " "}
+        return
+
+    plan = _planning_summary(message, agents)
+    yield {"type": "reasoning", "content": plan}
+
+    state: MeshState = {
+        "user_message": message,
+        "execution_message": execution_message or message,
+        "conversation_id": conversation_id,
+        "user_id": user_id,
+        "routed_agents": agents,
+        "agent_results": [],
+        "final_answer": "",
+    }
+    if agents:
+        state.update(await agents_node(state))
+    final_answer = aggregate_node(state)["final_answer"]
+    critique = _critique_answer(final_answer, state["agent_results"])
+    yield {"type": "reasoning", "content": critique}
+    for word in final_answer.split(" "):
+        yield {"type": "token", "content": word + " "}
+
+
+async def run_deep_turn(
+    message: str,
+    conversation_id: str = "default",
+    user_id: str = "anon",
+    execution_message: str | None = None,
+) -> AsyncIterator[str]:
+    async for payload in run_deep_turn_payloads(
+        message, conversation_id, user_id, execution_message
+    ):
+        if payload["type"] == "token":
+            yield payload["content"]
