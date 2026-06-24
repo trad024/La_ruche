@@ -38,7 +38,7 @@ test('portfolio deals table renders rows', async ({ page }) => {
   await goto(page, '/portfolio')
   await expect(page.getByRole('heading', { name: 'Portfolio Deals' })).toBeVisible()
   const rows = page.locator('tbody tr')
-  await expect(rows).toHaveCount(8)
+  await expect(rows).toHaveCount(9)
   await expect(page.getByText('Aurora Brands')).toBeVisible()
   await page.screenshot({ path: 'e2e/__screens__/portfolio.png' })
 })

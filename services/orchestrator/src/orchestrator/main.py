@@ -127,11 +127,6 @@ async def chat(  # noqa: B008
     user: UserContext = Depends(get_current_user),  # noqa: B008
 ) -> StreamingResponse:
     """Stream a chat turn through the LangGraph supervisor."""
-    try:
-        safe_message = check_message(body.message)
-    except GuardrailViolation as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     conv_id = body.conversation_id or str(uuid.uuid4())
 
     async def _sse() -> AsyncIterator[str]:
@@ -156,6 +151,20 @@ async def chat(  # noqa: B008
                 payload = json.dumps({"token": token, "conversation_id": conv_id})
                 yield f"data: {payload}\n\n"
         yield "data: [DONE]\n\n"
+
+    try:
+        safe_message = check_message(body.message)
+    except GuardrailViolation as exc:
+        refusal = (
+            "I can't comply with that request. As your wealth advisor, I can only help with "
+            "your portfolio, market data, and investment documents. I can't access other "
+            "clients' data, reveal system instructions, or override my guidelines."
+        )
+        payload = json.dumps({"token": refusal, "conversation_id": conv_id})
+        return StreamingResponse(
+            (f"data: {payload}\n\ndata: [DONE]\n\n",),
+            media_type="text/event-stream",
+        )
 
     return StreamingResponse(_sse(), media_type="text/event-stream")
 

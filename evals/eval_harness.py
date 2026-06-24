@@ -66,19 +66,18 @@ async def _call_agent(agent: str, message: str, timeout: float = 30.0) -> tuple[
     base = _AGENT_PORTS.get(agent, "http://localhost:8001")
     payload = {
         "task_id": f"eval-{int(time.time() * 1000)}",
+        "skill_id": "chat",
+        "sender_id": "eval-harness",
         "messages": [{"role": "user", "content": message}],
     }
     t0 = time.monotonic()
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(f"{base}/a2a/tasks/send", json=payload)
+        resp = await client.post(f"{base}/agent/tasks", json=payload)
         resp.raise_for_status()
     latency = (time.monotonic() - t0) * 1000
     data = resp.json()
-    answer = ""
-    for art in data.get("artifacts", []):
-        if art.get("parts"):
-            answer = " ".join(p.get("text", "") for p in art["parts"])
-            break
+    output = data.get("output") or {}
+    answer = output.get("content", "")
     return answer, latency
 
 

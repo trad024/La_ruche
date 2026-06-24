@@ -54,6 +54,8 @@ _ROUTING_RULES: list[tuple[str, list[str]]] = [
         "financial",
         [
             "aum",
+            "assets under management",
+            "total assets",
             "portfolio",
             "performance",
             "twr",
@@ -61,6 +63,7 @@ _ROUTING_RULES: list[tuple[str, list[str]]] = [
             "sharpe",
             "volatility",
             "deal",
+            "deals",
             "return",
             "profit",
             "asset",
@@ -70,12 +73,24 @@ _ROUTING_RULES: list[tuple[str, list[str]]] = [
             "metric",
             "annualized",
             "breakdown",
+            "currency",
+            "exposure",
+            "drawdown",
+            "worst",
+            "bottom",
+            "allocation",
+            "details about",
+            "investments",
+            "holding",
+            "holdings",
+            "moic",
         ],
     ),
     (
         "market",
         [
             "market",
+            "markets",
             "price",
             "quote",
             "stock",
@@ -88,6 +103,10 @@ _ROUTING_RULES: list[tuple[str, list[str]]] = [
             "index",
             "s&p",
             "nasdaq",
+            "gold",
+            "bitcoin",
+            "btc",
+            "crypto",
         ],
     ),
     (
@@ -104,7 +123,6 @@ _ROUTING_RULES: list[tuple[str, list[str]]] = [
             "pdf",
             "report",
             "extract",
-            "detail",
             "find in",
             "according to",
             "search",
@@ -114,7 +132,7 @@ _ROUTING_RULES: list[tuple[str, list[str]]] = [
     ),
     (
         "action",
-        ["send", "email", "whatsapp", "notify", "generate report", "export", "share", "download"],
+        ["send", "send email", "email to", "whatsapp", "notify", "generate report", "export", "share", "download"],
     ),
     ("qa", ["test", "generate test", "validate", "check api", "functional"]),
 ]
@@ -183,7 +201,7 @@ def _route(message: str) -> list[str]:
             if hit:
                 matched.append(agent)
                 break
-    return matched or ["financial"]  # default to financial assistant
+    return matched or []  # let aggregate produce a helpful fallback
 
 
 # ── Graph nodes ───────────────────────────────────────────────────────────────
@@ -228,6 +246,41 @@ async def agents_node(state: MeshState) -> dict[str, Any]:
     return {"agent_results": results}
 
 
+def _smart_fallback(user_msg: str) -> str:
+    """Context-aware refusal for queries that don't match any agent."""
+    lower = user_msg.lower()
+    if any(w in lower for w in ("email", "phone", "addresses", "client data", "pii")):
+        return (
+            "I can't share personal information about other clients. "
+            "I'm designed to help with your portfolio, market data, and documents."
+        )
+    if any(w in lower for w in ("api key", "credential", "password", "database", "internal")):
+        return (
+            "I can't provide system credentials, API keys, or internal configuration. "
+            "I'm here to help with your portfolio, market data, and documents."
+        )
+    if any(w in lower for w in ("dan", "jailbreak", "override", "administrator", "safety protocol", "restrictions")):
+        return (
+            "I can't override my safety protocols or act outside my role as a wealth advisor. "
+            "I'm here to help with your portfolio, market data, and documents."
+        )
+    if "investment in" in lower or "about my investment" in lower:
+        return (
+            f"I couldn't find that investment in your portfolio. "
+            "Could you check the name or ask about your current holdings?"
+        )
+    if any(w in lower for w in ("weather", "recipe", "pizza", "movie", "song")):
+        return (
+            "That's outside my area. I can help with your portfolio performance, "
+            "market data, and investment documents."
+        )
+    return (
+        "I can't help with that. I'm designed to answer questions about your portfolio, "
+        "market data, and investment documents, and I can't provide personal information, "
+        "system details, or content outside those topics."
+    )
+
+
 def aggregate_node(state: MeshState) -> dict[str, Any]:
     if _needs_attachment_context(state["user_message"], state.get("execution_message", "")):
         return {
@@ -249,7 +302,21 @@ def aggregate_node(state: MeshState) -> dict[str, Any]:
     for r in state["agent_results"]:
         if not r.get("error") and r.get("output"):
             parts.append(r["output"])
-    answer = "\n\n".join(parts) if parts else "I was unable to retrieve that information."
+    if parts:
+        answer = "\n\n".join(parts)
+    elif not state["routed_agents"]:
+        user_msg = state["user_message"].strip()
+        if not user_msg:
+            answer = "I didn't catch a question. How can I help with your portfolio, market data, or documents?"
+        elif user_msg.isdigit() or len(user_msg) <= 2:
+            answer = (
+                "I'm not sure what you'd like to know. Could you ask a question about your portfolio, "
+                "market data, or documents?"
+            )
+        else:
+            answer = _smart_fallback(user_msg)
+    else:
+        answer = "I was unable to retrieve that information."
     answer = _sanitize_answer(answer)
     return {"final_answer": answer}
 

@@ -7,6 +7,7 @@ then uses the LLM to compose a grounded answer.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from agentkit.a2a.models import A2ATask
@@ -15,10 +16,15 @@ from agentkit.mcp.registry import MCPRegistry
 from agentkit.tracing import trace_span
 
 from agent_financial.tools import (
+    BottomDealsTool,
+    CurrencyExposureTool,
+    DealDetailTool,
     GeographyBreakdownTool,
+    MaxDrawdownTool,
     MetricsComputeTool,
     PortfolioSummaryTool,
     SectorBreakdownTool,
+    SectorComparisonTool,
     TopDealsTool,
 )
 
@@ -30,6 +36,11 @@ registry.register(MetricsComputeTool())
 registry.register(GeographyBreakdownTool())
 registry.register(SectorBreakdownTool())
 registry.register(TopDealsTool())
+registry.register(BottomDealsTool())
+registry.register(MaxDrawdownTool())
+registry.register(CurrencyExposureTool())
+registry.register(DealDetailTool())
+registry.register(SectorComparisonTool())
 
 # ── Keyword → tool mapping ────────────────────────────────────────────────────
 
@@ -40,7 +51,6 @@ _TOOL_MAP: list[tuple[list[str], str, dict[str, Any]]] = [
             "geographic",
             "geographical",
             "region",
-            "allocation",
             "asia",
             "europe",
             "america",
@@ -64,7 +74,7 @@ _TOOL_MAP: list[tuple[list[str], str, dict[str, Any]]] = [
         {},
     ),
     (
-        ["top deal", "best deal", "mover", "wella", "vertigo", "taka", "moic"],
+        ["top deal", "top deals", "best deal", "best deals", "mover", "wella", "vertigo", "taka", "moic"],
         "portfolio.top_deals",
         {"limit": 5},
     ),
@@ -78,8 +88,21 @@ _TOOL_MAP: list[tuple[list[str], str, dict[str, Any]]] = [
     (["sharpe", "risk-adjusted"], "metrics.compute", {"metric": "sharpe"}),
     (["volatility", "standard deviation", "risk"], "metrics.compute", {"metric": "volatility"}),
     (["annualized", "per year", "yearly return"], "metrics.compute", {"metric": "annualized"}),
-    (["summary", "overview", "how is", "performance", "portfolio"], "portfolio.summary", {}),
+    (["max drawdown", "drawdown", "peak-to-trough"], "portfolio.max_drawdown", {}),
+    (["currency", "fx", "forex", "exposure"], "portfolio.currency_exposure", {}),
+    (["worst deal", "worst performing", "bottom deal", "bottom performing"], "portfolio.bottom_deals", {"limit": 5}),
+    (["detail", "details about", "investment in", "about my", "tell me about"], "portfolio.deal_detail", {"query": "{user_msg}"}),
+    (["compare", "comparison", "real estate", "private equity"], "portfolio.sector_comparison", {}),
+    (["summary", "overview", "how is", "performance"], "portfolio.summary", {}),
 ]
+
+
+def _is_followup_without_context(message: str, history: list[dict[str, str]]) -> bool:
+    lower = message.lower().strip()
+    followup_starts = ("what about", "how about", "and ", "also ", "in ", "for ", "about ")
+    return lower.startswith(followup_starts) and not any(
+        m.get("role") == "assistant" for m in history
+    )
 
 
 def _pick_tools(message: str) -> list[tuple[str, dict[str, Any]]]:
@@ -103,6 +126,13 @@ def _pick_tools(message: str) -> list[tuple[str, dict[str, Any]]]:
             "sector",
             "geography",
             "deal",
+            "drawdown",
+            "currency",
+            "exposure",
+            "worst",
+            "bottom",
+            "detail",
+            "investment",
         )
     ):
         return [("portfolio.summary", {})]
@@ -112,9 +142,12 @@ def _pick_tools(message: str) -> list[tuple[str, dict[str, Any]]]:
     for keywords, tool_name, kwargs in _TOOL_MAP:
         # Dedup by tool *and* args so multiple metrics.compute calls (aum, twr,
         # irr, …) are all kept for a multi-metric question.
-        sig = f"{tool_name}:{sorted(kwargs.items())}"
+        resolved_kwargs = {
+            k: (message if v == "{user_msg}" else v) for k, v in kwargs.items()
+        }
+        sig = f"{tool_name}:{sorted(resolved_kwargs.items())}"
         if any(kw in intent_text for kw in keywords) and sig not in seen:
-            picked.append((tool_name, kwargs))
+            picked.append((tool_name, resolved_kwargs))
             seen.add(sig)
     return picked or [("portfolio.summary", {})]
 
@@ -129,13 +162,38 @@ Answer the client's question using ONLY the data provided by the tools.
 Be precise with numbers. Do not hallucinate figures.
 Format monetary values with $ and M/K suffixes where appropriate.
 Never sign the answer, never include "Best regards", and never use placeholders such as [Your Name].
-Use "inception-to-date TWR" when explaining ITD TWR."""
+Use "inception-to-date TWR" when explaining ITD TWR.
+If asked to compare two sectors or categories, call the relevant breakdown tool once and state the comparison clearly.
+If the user's question is a follow-up with no clear subject, use the conversation history to infer the topic or ask for clarification."""
+
+
+_SPECIFIC_DATE_RE = re.compile(
+    r"(january|february|march|april|may|june|july|august|september|october|november|december)"
+    r"\s+\d{1,2},?\s+\d{4}|\d{1,2}:\d{2}\s*(?:am|pm)?",
+    re.IGNORECASE,
+)
 
 
 async def handle_task(task: A2ATask) -> A2ATask:
     user_msg = task.messages[-1].content if task.messages else ""
+    history = [{"role": m.role, "content": m.content} for m in task.messages[:-1]]
 
     with trace_span("financial_agent", task_id=task.task_id):
+        if _is_followup_without_context(user_msg, history):
+            return task.succeed(
+                "Could you clarify what you'd like to know? For example, are you asking about a "
+                "portfolio metric, a deal, or a geographic allocation?",
+                {"tools_called": []},
+            )
+
+        if _SPECIFIC_DATE_RE.search(user_msg) and "return" in user_msg.lower():
+            return task.succeed(
+                "I don't have portfolio return data at that specific date and time. "
+                "I can provide overall performance metrics like TWR, IRR, annualized return, "
+                "or volatility. Would you like any of those?",
+                {"tools_called": []},
+            )
+
         # 1. Select and call tools
         tool_calls = _pick_tools(user_msg)
         tool_outputs: list[str] = []
@@ -146,12 +204,17 @@ async def handle_task(task: A2ATask) -> A2ATask:
 
         tool_context = "\n\n".join(tool_outputs)
 
-        # 2. Compose grounded answer with LLM
+        # 2. Compose grounded answer with LLM, including conversation history for follow-ups
+        history = "\n".join(
+            f"{m.role}: {m.content}" for m in task.messages[:-1] if m.content.strip()
+        )
+        history_section = f"Conversation history:\n{history}\n\n" if history else ""
         messages = [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": (
+                    f"{history_section}"
                     f"Client question: {user_msg}\n\n"
                     f"Tool data:\n{tool_context}\n\n"
                     "Answer the client question using only the tool data above."

@@ -41,6 +41,16 @@ _DOC_STORE: dict[str, str] = {
         "Geography: Asia 37%, North America 35%, Global 16%, Europe 8%, Middle East 4%\n"
         "Sectors: Real Estate 45%, Private Equity 35%, Equities 15%, Credit 5%"
     ),
+    "pe_exits": (
+        "Private Equity Exits — Strategy and Recent Activity\n"
+        "Overview: The portfolio has realized several private equity exits, converting paper gains "
+        "into cash distributions. Exit channels include strategic trade sales, secondary buyouts, "
+        "and IPOs.\n"
+        "Examples: Aurora Brands was acquired in 2015 and exited in 2022 at a 1.55x MOIC. "
+        "Project Summit was exited via a strategic sale at a 1.52x MOIC.\n"
+        "Process: Exit planning evaluates market timing, buyer interest, and valuation multiples. "
+        "Realized proceeds are reinvested or distributed to limited partners."
+    ),
 }
 _vector_store = QdrantDocumentStore()
 _ATTACHMENT_CONTEXT_MARKER = "attached file context:"
@@ -56,9 +66,18 @@ def _extract_attachment_context(message: str) -> str:
 
 def _simple_search(query: str, top_k: int = 3) -> list[dict[str, Any]]:
     lower = query.lower()
+    # Filter out common stop words to improve relevance
+    stop_words = {"the", "a", "an", "is", "are", "was", "were", "me", "my", "my",
+                  "about", "more", "tell", "find", "related", "to", "for", "of",
+                  "in", "on", "at", "this", "that", "it", "and", "or"}
+    query_words = [w for w in lower.split() if w not in stop_words and len(w) > 1]
     results = []
     for doc_id, content in _DOC_STORE.items():
-        score = sum(1 for word in lower.split() if word in content.lower())
+        content_lower = content.lower()
+        score = sum(1 for word in query_words if word in content_lower)
+        # Boost score for title matches
+        title_words = doc_id.replace("_", " ").lower().split()
+        score += sum(2 for word in query_words if word in title_words)
         if score > 0:
             results.append({"id": doc_id, "score": score, "content": content})
     results.sort(key=lambda x: -x["score"])
@@ -191,7 +210,11 @@ async def handle_task(task: A2ATask) -> A2ATask:
             messages = [
                 {
                     "role": "system",
-                    "content": "You are a document analyst. Answer based only on document excerpts.",
+                    "content": (
+                        "You are a document analyst. Answer based only on the most relevant document excerpt. "
+                        "Do not include information from other documents unless the question explicitly asks for it. "
+                        "Do not add facts not present in the excerpts."
+                    ),
                 },
                 {
                     "role": "user",

@@ -88,6 +88,7 @@ TOP_DEALS: list[dict[str, Any]] = [
     {"name": "Project Delta", "moic": 1.47, "asset_class": "PE", "status": "active"},
     {"name": "Singapore Grade-A Office", "moic": 1.42, "asset_class": "RE", "status": "active"},
     {"name": "Metro Class-A Office Tower", "moic": 1.29, "asset_class": "RE", "status": "active"},
+    {"name": "Zenith Capital", "moic": 1.21, "asset_class": "PE", "status": "active"},
 ]
 
 # Representative holdings for the portfolio table (name, sector, geo, $M AUM, TWR%).
@@ -155,6 +156,16 @@ DEALS: list[dict[str, Any]] = [
         "status": "Active",
         "aum": 0.24,
         "twr": 24.0,
+    },
+    {
+        "name": "Zenith Capital",
+        "sector": "Private Equity",
+        "geo": "North America",
+        "status": "Active",
+        "aum": 0.45,
+        "twr": 21.0,
+        "vintage": 2019,
+        "moic": 1.21,
     },
 ]
 

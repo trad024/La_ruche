@@ -38,7 +38,7 @@ def _get_client() -> Any | None:
 def trace_span(name: str, **metadata: Any) -> Generator[None, None, None]:
     """Context manager that records a Langfuse span when configured, otherwise noop."""
     lf = _get_client()
-    if lf is None:
+    if lf is None or not hasattr(lf, "trace"):
         yield
         return
 
