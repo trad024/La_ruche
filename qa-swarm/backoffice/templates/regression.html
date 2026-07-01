@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Regression Comparison</h1>
+
+<div class="card">
+  <form class="inline" method="post" action="/regression">
+    <label>Baseline
+      <select name="baseline">
+        {% for r in runs %}<option value="{{ r.run_id }}">{{ r.run_id }} (v{{ r.version }})</option>{% endfor %}
+      </select>
+    </label>
+    <label>Candidate
+      <select name="candidate">
+        {% for r in runs %}<option value="{{ r.run_id }}">{{ r.run_id }} (v{{ r.version }})</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn btn-primary" type="submit">Compare</button>
+  </form>
+</div>
+
+{% if result %}
+<h2>Results</h2>
+<pre>{{ result }}</pre>
+{% endif %}
+{% endblock %}

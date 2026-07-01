@@ -150,15 +150,7 @@ def render_html(report: RunReport) -> str:
             col=2,
         )
     else:
-        fig.add_annotation(
-            text="No failures",
-            xref="paper",
-            yref="paper",
-            x=0.75,
-            y=0.25,
-            showarrow=False,
-            font=dict(size=14, color="#34d399"),
-        )
+        fig.add_annotation(text="No failures", row=2, col=2, showarrow=False)
 
     avail = availability(report)
     fig.update_layout(
